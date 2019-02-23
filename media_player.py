@@ -36,10 +36,6 @@ DEFAULT_NAME = 'Yamaha R-N301'
 DEFAULT_TIMEOUT = 5
 BASE_URL = 'http://{0}/YamahaRemoteControl/ctrl'
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(ATTR_ENABLED): cv.boolean,
-    vol.Required(ATTR_PORT): cv.string,
-})
 SERVICE_ENABLE_OUTPUT = 'yamaha_enable_output'
 SUPPORT_YAMAHA = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | \
     SUPPORT_TURN_ON | SUPPORT_TURN_OFF | SUPPORT_SELECT_SOURCE | \
@@ -51,6 +47,8 @@ SUPPORTED_PLAYBACK = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | \
     SUPPORT_TURN_ON | SUPPORT_TURN_OFF | SUPPORT_SELECT_SOURCE
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+    vol.Required(ATTR_ENABLED): cv.boolean,
+    vol.Required(ATTR_PORT): cv.string,
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
     vol.Required(CONF_HOST): cv.string})
 SOURCE_MAPPING = {
