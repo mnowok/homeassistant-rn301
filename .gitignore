@@ -1,0 +1,11 @@
+/*
+!.gitignore
+!automations.yaml
+
+custom_components/*
+!custom_components/
+!custom_components/rn301
+custom_components/*/__pycache__/
+
+!/README.md
+!/*.yaml
