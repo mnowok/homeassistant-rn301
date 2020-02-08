@@ -14,19 +14,12 @@ group: !include groups.yaml
 automation: !include automations.yaml
 script: !include scripts.yaml
 scene: !include scenes.yaml
-hello_world_async:
-
-example:
-  target: binary_sensor.abc
 
 media_player:
   - platform: rn301
     name: "Yamaha R-N301"
-    host: 192.168.213.51
-    enabled: true
-    port: 80
+    host: 192.168.213.52
 
-    
 logger:
   default: info
   logs:

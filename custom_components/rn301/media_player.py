@@ -39,8 +39,6 @@ SUPPORTED_PLAYBACK = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | \
                      SUPPORT_TURN_ON | SUPPORT_TURN_OFF | SUPPORT_SELECT_SOURCE
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(ATTR_ENABLED): cv.boolean,
-    vol.Required(ATTR_PORT): cv.string,
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
     vol.Required(CONF_HOST): cv.string})
 SOURCE_MAPPING = {
@@ -98,23 +96,6 @@ class YamahaRn301MP(MediaPlayerDevice):
         _LOGGER.debug("Init called")
         self.update()
 
-    def _do_api_request(self, data) -> str:
-        data = '<?xml version="1.0" encoding="utf-8"?>' + data
-        req = requests.post(self._base_url, data=data, timeout=DEFAULT_TIMEOUT)
-        if req.status_code != 200:
-            _LOGGER.exception("Error doing API request, %d, %s", req.status_code, data)
-        else:
-            _LOGGER.debug("API request ok %d", req.status_code)
-        return req.text
-
-    def _do_api_get(self, data) -> str:
-        data = '<YAMAHA_AV cmd="GET">' + data + '</YAMAHA_AV>'
-        return self._do_api_request(data)
-
-    def _do_api_put(self, data) -> str:
-        data = '<YAMAHA_AV cmd="PUT">' + data + '</YAMAHA_AV>'
-        return self._do_api_request(data)
-
     def update(self) -> None:
         data = self._do_api_get("<Main_Zone><Basic_Status>GetParam</Basic_Status></Main_Zone>")
         tree = ET.fromstring(data)
@@ -164,6 +145,108 @@ class YamahaRn301MP(MediaPlayerDevice):
     def is_volume_muted(self) -> bool:
         return self._muted
 
+    @property
+    def media_position(self):
+        """Duration of current playing media"""
+        return self._media_play_position
+
+    @property
+    def media_position_updated_at(self):
+        """Duration of current playing media"""
+        return self._media_play_position_updated
+
+    @property
+    def media_title(self):
+        """Title of currently playing track"""
+        return self._media_meta.get('song')
+
+    @property
+    def media_album(self):
+        """Album of currently playing track"""
+        return self._media_meta.get('album')
+
+    @property
+    def media_artist(self) -> Optional[str]:
+        """Artist of currently playing track"""
+        if self._source == "Net Radio":
+            return self._media_meta.get('station')
+        return self._media_meta.get('artist')
+
+    @property
+    def media_content_type(self):
+        return MEDIA_TYPE_PLAYLIST
+
+    @property
+    def shuffle(self):
+        return self._media_play_shuffle
+
+    def set_shuffle(self, shuffle):
+        self._media_play_control("Shuffle")
+
+    def turn_on(self):
+        """Turn on the amplifier"""
+        self._set_power_state(True)
+
+    def turn_off(self):
+        """Turn off the amplifier"""
+        self._set_power_state(False)
+
+    def set_volume_level(self, volume):
+        self._do_api_put(
+            '<Main_Zone><Volume><Lvl><Val>{0}</Val><Exp>0</Exp><Unit></Unit></Lvl></Volume></Main_Zone>'.format(
+                int(volume * 50)))
+
+    def select_source(self, source):
+        self._do_api_put(
+            '<Main_Zone><Input><Input_Sel>{0}</Input_Sel></Input></Main_Zone>'.format(SOURCE_MAPPING[source]))
+
+    def mute_volume(self, mute):
+        self._do_api_put('<System><Volume><Mute>{0}</Mute></Volume></System>'.format('On' if mute else 'Off'))
+        self._muted = mute
+
+    def _media_play_control(self, command):
+        self._do_api_put(
+            '<{0}><Play_Control><Playback>{1}</Playback></Play_Control></{0}>'.format(self._device_source, command))
+
+    def media_play(self):
+        """Play media"""
+        self._media_play_control("Play")
+
+    def media_pause(self):
+        """Play media"""
+        self._media_play_control("Pause")
+
+    def media_stop(self):
+        """Play media"""
+        self._media_play_control("Stop")
+
+    def media_next_track(self):
+        self._media_play_control("Skip Fwd")
+
+    def media_previous_track(self):
+        self._media_play_control("Skip Rev")
+
+    def _set_power_state(self, on):
+        self._do_api_put(
+            '<System><Power_Control><Power>{0}</Power></Power_Control></System>'.format("On" if on else "Standby"))
+
+    def _do_api_request(self, data) -> str:
+        data = '<?xml version="1.0" encoding="utf-8"?>' + data
+        req = requests.post(self._base_url, data=data, timeout=DEFAULT_TIMEOUT)
+        if req.status_code != 200:
+            _LOGGER.exception("Error doing API request, %d, %s", req.status_code, data)
+        else:
+            _LOGGER.debug("API request ok %d", req.status_code)
+        return req.text
+
+    def _do_api_get(self, data) -> str:
+        data = '<YAMAHA_AV cmd="GET">' + data + '</YAMAHA_AV>'
+        return self._do_api_request(data)
+
+    def _do_api_put(self, data) -> str:
+        data = '<YAMAHA_AV cmd="PUT">' + data + '</YAMAHA_AV>'
+        return self._do_api_request(data)
+
     def _nullify_media_fields(self) -> None:
         """Set media fields to null as we don't require them on certain channels"""
         self._media_meta = {}
@@ -212,88 +295,3 @@ class YamahaRn301MP(MediaPlayerDevice):
                 self._nullify_media_fields()
         except:
             _LOGGER.exception(data)
-
-    @property
-    def media_position(self):
-        """Duration of current playing media"""
-        return self._media_play_position
-
-    @property
-    def media_position_updated_at(self):
-        """Duration of current playing media"""
-        return self._media_play_position_updated
-
-    @property
-    def media_title(self):
-        """Title of currently playing track"""
-        return self._media_meta.get('song')
-
-    @property
-    def media_album(self):
-        """Album of currently playing track"""
-        return self._media_meta.get('album')
-
-    @property
-    def media_artist(self) -> Optional[str]:
-        """Artist of currently playing track"""
-        if self._source == "Net Radio":
-            return self._media_meta.get('station')
-        return self._media_meta.get('artist')
-
-    @property
-    def media_content_type(self):
-        return MEDIA_TYPE_PLAYLIST
-
-    @property
-    def shuffle(self):
-        return self._media_play_shuffle
-
-    def set_shuffle(self, shuffle):
-        self._media_play_control("Shuffle")
-
-    def _set_power_state(self, on):
-        self._do_api_put(
-            '<System><Power_Control><Power>{0}</Power></Power_Control></System>'.format("On" if on else "Standby"))
-
-    def turn_on(self):
-        """Turn on the amplifier"""
-        self._set_power_state(True)
-
-    def turn_off(self):
-        """Turn off the amplifier"""
-        self._set_power_state(False)
-
-    def set_volume_level(self, volume):
-        self._do_api_put(
-            '<Main_Zone><Volume><Lvl><Val>{0}</Val><Exp>0</Exp><Unit></Unit></Lvl></Volume></Main_Zone>'.format(
-                int(volume * 50)))
-
-    def select_source(self, source):
-        self._do_api_put(
-            '<Main_Zone><Input><Input_Sel>{0}</Input_Sel></Input></Main_Zone>'.format(SOURCE_MAPPING[source]))
-
-    def mute_volume(self, mute):
-        self._do_api_put('<System><Volume><Mute>{0}</Mute></Volume></System>'.format('On' if mute else 'Off'))
-        self._muted = mute
-
-    def _media_play_control(self, command):
-        self._do_api_put(
-            '<{0}><Play_Control><Playback>{1}</Playback></Play_Control></{0}>'.format(self._device_source, command))
-
-    def media_play(self):
-        """Play media"""
-        self._media_play_control("Play")
-
-    def media_pause(self):
-        """Play media"""
-        self._media_play_control("Pause")
-
-    def media_stop(self):
-        """Play media"""
-        self._media_play_control("Stop")
-
-    def media_next_track(self):
-        self._media_play_control("Skip Fwd")
-
-    def media_previous_track(self):
-        self._media_play_control("Skip Rev")
