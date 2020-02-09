@@ -1,5 +1,6 @@
 import logging
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 from typing import Optional
 
@@ -10,9 +11,9 @@ from homeassistant.components.media_player import (
     MediaPlayerDevice, PLATFORM_SCHEMA)
 
 from homeassistant.components.media_player.const import (
-    MEDIA_TYPE_PLAYLIST, MEDIA_TYPE_CHANNEL, SUPPORT_NEXT_TRACK, SUPPORT_PAUSE, SUPPORT_PLAY, SUPPORT_PLAY_MEDIA, SUPPORT_PREVIOUS_TRACK,
+    MEDIA_TYPE_PLAYLIST, MEDIA_TYPE_CHANNEL, SUPPORT_NEXT_TRACK, SUPPORT_PAUSE, SUPPORT_PLAY, SUPPORT_PREVIOUS_TRACK,
     SUPPORT_SELECT_SOURCE, SUPPORT_STOP, SUPPORT_TURN_OFF, SUPPORT_TURN_ON, SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET,
-    SUPPORT_SHUFFLE_SET, SUPPORT_SEEK)
+    SUPPORT_SHUFFLE_SET)
 from homeassistant.const import (
     CONF_HOST, CONF_NAME, STATE_OFF, STATE_IDLE, STATE_PLAYING, STATE_UNKNOWN)
 
@@ -29,18 +30,17 @@ DEFAULT_TIMEOUT = 5
 BASE_URL = 'http://{0}/YamahaRemoteControl/ctrl'
 
 SERVICE_ENABLE_OUTPUT = 'yamaha_enable_output'
-SUPPORT_YAMAHA = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | \
-                 SUPPORT_TURN_ON | SUPPORT_TURN_OFF | SUPPORT_SELECT_SOURCE | \
-                 SUPPORT_PLAY | SUPPORT_PLAY_MEDIA | SUPPORT_PAUSE | SUPPORT_STOP | \
-                 SUPPORT_NEXT_TRACK | SUPPORT_PREVIOUS_TRACK | SUPPORT_SHUFFLE_SET | \
-                 SUPPORT_NEXT_TRACK | SUPPORT_PREVIOUS_TRACK | SUPPORT_SEEK
+SUPPORT_YAMAHA = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | SUPPORT_TURN_ON | SUPPORT_TURN_OFF | \
+                 SUPPORT_SELECT_SOURCE | SUPPORT_PLAY | SUPPORT_PAUSE | SUPPORT_STOP | \
+                 SUPPORT_NEXT_TRACK | SUPPORT_PREVIOUS_TRACK | SUPPORT_SHUFFLE_SET
 
-SUPPORTED_PLAYBACK = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | \
-                     SUPPORT_TURN_ON | SUPPORT_TURN_OFF | SUPPORT_SELECT_SOURCE
+SUPPORTED_PLAYBACK = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | SUPPORT_TURN_ON | SUPPORT_TURN_OFF | \
+                     SUPPORT_SELECT_SOURCE | SUPPORT_SHUFFLE_SET
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-    vol.Required(CONF_HOST): cv.string})
+    vol.Required(CONF_HOST): cv.string
+})
 SOURCE_MAPPING = {
     'Optical': 'OPTICAL',
     'CD': 'CD',
@@ -121,7 +121,7 @@ class YamahaRn301MP(MediaPlayerDevice):
 
     @property
     def supported_features(self):
-        if self._source in ("TV", "Chromecast Audio", "Decks"):
+        if self._source in ("Optical", "CD", "Line 1", "Line 2", "Line 3", "Tuner"):
             return SUPPORTED_PLAYBACK
         return SUPPORT_YAMAHA
 
@@ -158,7 +158,12 @@ class YamahaRn301MP(MediaPlayerDevice):
     @property
     def media_title(self):
         """Title of currently playing track"""
-        return self._media_meta.get('song')
+        if "song" in self._media_meta and "frequency" in self._media_meta:
+            return self._media_meta["song"] if datetime.now().second < 20 else self._media_meta["frequency"]
+        elif "song" in self._media_meta:
+            return self._media_meta.get("song")
+        elif "frequency" in self._media_meta:
+            return self._media_meta.get("frequency")
 
     @property
     def media_album(self):
@@ -287,26 +292,38 @@ class YamahaRn301MP(MediaPlayerDevice):
 
         try:
             if self._device_source in device_mapping:
-                data = self._do_api_get("<{0}><Play_Info>GetParam</Play_Info></{0}>".format(device_mapping[self._device_source]))
+                data = self._do_api_get(
+                    "<{0}><Play_Info>GetParam</Play_Info></{0}>".format(device_mapping[self._device_source]))
                 self._media_meta = {}
                 tree = ET.fromstring(data)
                 for node in tree[0][0]:
-                    if node.tag == "Play_Mode":
-                        self._media_play_repeat = node.text == "On"
-                        self._media_play_shuffle = node.text == "On"
-                    elif node.tag == "Play_Time":
-                        self._media_play_position = int(node.text)
-                        self._media_play_position_updated = dt_util.utcnow()
-                    elif node.tag == "Meta_Info":
-                        for meta in node:
-                            if meta.tag in media_meta_mapping and meta.text:
-                                self._media_meta[media_meta_mapping[meta.tag]] = meta.text.replace('&amp;', '&')
-                    elif node.tag == "Playback_Info":
-                        self._set_playback_info(node.text)
-                    elif node.tag == "Signal_Info":
-                        for meta in node:
-                            if meta.tag == "Tuned":
-                                self._set_playback_info(meta.text)
+                    try:
+                        if node.tag == "Play_Mode":
+                            self._media_play_repeat = node.text == "On"
+                            self._media_play_shuffle = node.text == "On"
+                        elif node.tag == "Play_Time":
+                            self._media_play_position = int(node.text)
+                            self._media_play_position_updated = dt_util.utcnow()
+                        elif node.tag == "Meta_Info":
+                            for meta in node:
+                                if meta.tag in media_meta_mapping and meta.text:
+                                    self._media_meta[media_meta_mapping[meta.tag]] = meta.text.replace('&amp;', '&')
+                        elif node.tag == "Playback_Info":
+                            self._set_playback_info(node.text)
+                        elif node.tag == "Signal_Info":
+                            node.find("Tuned")
+                            self._set_playback_info(node.find("Tuned").text)
+                        elif node.tag == "Tuning":
+                            band = node.find("Band").text
+                            current = node.find("Freq").find("Current")
+                            val = float(current.find("Val").text) / 100
+                            unit = current.find("Unit").text
+                            self._media_meta["frequency"] = f"{band} {val} {unit}"
+                    except Exception as e:
+                        _LOGGER.warning(e)
+
+                _LOGGER.debug("_media_meta")
+                _LOGGER.debug(self._media_meta)
             else:
                 self._nullify_media_fields()
         except:
