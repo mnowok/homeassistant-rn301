@@ -18,7 +18,7 @@ scene: !include scenes.yaml
 media_player:
   - platform: rn301
     name: "Yamaha R-N301"
-    host: 192.168.213.52
+    host: 192.168.213.51
 
 logger:
   default: info
