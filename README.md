@@ -1,7 +1,20 @@
 
-# R-N301 custom component for homeassistant
+# CD-N301 custom component for homeassistant
 
-Place 'media_player.py' in `${HOMEASSISTANTCONFIG}/custom_components/rn301/`
+Place 'media_player.py' in `${HOMEASSISTANTCONFIG}/custom_components/cdn301/`
+
+To play NET RADIO station use:
+
+media_player.play_media service with media_content_id = "station name" and media_content_type = "NET RADIO"
+
+Example:
+
+    entity_id: media_player.yamaha_cd_n301
+    media_content_type: "NET RADIO"
+    media_content_id: "Bookmarks>Chillout>Smooth Chill"
+
+
+Look at https://www.home-assistant.io/integrations/yamaha/
 
 ##Development
 

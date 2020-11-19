@@ -1,5 +1,9 @@
 import logging
 import xml.etree.ElementTree as ET
+from collections import namedtuple
+from defusedxml import cElementTree
+import xml
+import time
 from datetime import datetime
 
 from typing import Optional
@@ -11,7 +15,7 @@ from homeassistant.components.media_player import (
     MediaPlayerEntity, PLATFORM_SCHEMA)
 
 from homeassistant.components.media_player.const import (
-    MEDIA_TYPE_PLAYLIST, MEDIA_TYPE_CHANNEL, SUPPORT_NEXT_TRACK, SUPPORT_PAUSE, SUPPORT_PLAY, SUPPORT_PREVIOUS_TRACK,
+    MEDIA_TYPE_MUSIC, MEDIA_TYPE_PLAYLIST, MEDIA_TYPE_CHANNEL, SUPPORT_NEXT_TRACK, SUPPORT_PAUSE, SUPPORT_PLAY, SUPPORT_PLAY_MEDIA, SUPPORT_PREVIOUS_TRACK,
     SUPPORT_SELECT_SOURCE, SUPPORT_STOP, SUPPORT_TURN_OFF, SUPPORT_TURN_ON, SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET,
     SUPPORT_SHUFFLE_SET)
 from homeassistant.const import (
@@ -20,21 +24,21 @@ from homeassistant.const import (
 import homeassistant.util.dt as dt_util
 import homeassistant.helpers.config_validation as cv
 
-DOMAIN = 'rn301'
+DOMAIN = 'cdn301'
 
 ATTR_ENABLED = 'enabled'
 ATTR_PORT = 'port'
 DATA_YAMAHA = 'yamaha_known_receivers'
-DEFAULT_NAME = 'Yamaha R-N301'
+DEFAULT_NAME = 'Yamaha CD-N301'
 DEFAULT_TIMEOUT = 5
 BASE_URL = 'http://{0}/YamahaRemoteControl/ctrl'
 
 SERVICE_ENABLE_OUTPUT = 'yamaha_enable_output'
-SUPPORT_YAMAHA = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | SUPPORT_TURN_ON | SUPPORT_TURN_OFF | \
-                 SUPPORT_SELECT_SOURCE | SUPPORT_PLAY | SUPPORT_PAUSE | SUPPORT_STOP | \
+SUPPORT_YAMAHA = SUPPORT_TURN_ON | SUPPORT_TURN_OFF | \
+                 SUPPORT_SELECT_SOURCE | SUPPORT_PLAY | SUPPORT_PLAY_MEDIA | SUPPORT_PAUSE | SUPPORT_STOP | \
                  SUPPORT_NEXT_TRACK | SUPPORT_PREVIOUS_TRACK | SUPPORT_SHUFFLE_SET
 
-SUPPORTED_PLAYBACK = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | SUPPORT_TURN_ON | SUPPORT_TURN_OFF | \
+SUPPORTED_PLAYBACK = SUPPORT_TURN_ON | SUPPORT_TURN_OFF | \
                      SUPPORT_SELECT_SOURCE | SUPPORT_SHUFFLE_SET
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
@@ -45,12 +49,8 @@ SOURCE_MAPPING = {
     'Optical': 'OPTICAL',
     'CD': 'CD',
     'Spotify': 'Spotify',
-    'Line 1': 'LINE1',
-    'Line 2': 'LINE2',
-    'Line 3': 'LINE3',
     'Net Radio': 'NET RADIO',
-    'Server': 'SERVER',
-    'Tuner': 'TUNER'
+    'Server': 'SERVER'
 }
 
 _LOGGER = logging.getLogger(__name__)
@@ -58,12 +58,15 @@ _LOGGER = logging.getLogger(__name__)
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
     devices = []
-    device = YamahaRn301MP(config.get(CONF_NAME), config.get(CONF_HOST))
+    device = YamahaCdn301MP(config.get(CONF_NAME), config.get(CONF_HOST))
     devices.append(device)
     add_devices(devices)
 
 
-class YamahaRn301MP(MediaPlayerEntity):
+class YamahaCdn301MP(MediaPlayerEntity):
+    MenuStatus = namedtuple("MenuStatus", "ready layer name current_line max_line current_list")
+    ListGet = "<{src_name}><List_Info>GetParam</List_Info></{src_name}>"
+    SelectNetRadioLine = "<Player><List_Control><Direct_Sel>Line_{lineno}</Direct_Sel></List_Control></Player>"
 
     def __init__(self, name, host):
         self._data = None
@@ -96,7 +99,7 @@ class YamahaRn301MP(MediaPlayerEntity):
         _LOGGER.debug("Init called")
 
     def update(self) -> None:
-        data = self._do_api_get("<Main_Zone><Basic_Status>GetParam</Basic_Status></Main_Zone>")
+        data = self._do_api_get("<System><Basic_Status>GetParam</Basic_Status></System>")
         tree = ET.fromstring(data)
         for node in tree[0][0]:
             if node.tag == "Power_Control":
@@ -121,7 +124,7 @@ class YamahaRn301MP(MediaPlayerEntity):
 
     @property
     def supported_features(self):
-        if self._source in ("Optical", "CD", "Line 1", "Line 2", "Line 3", "Tuner"):
+        if self._source in ("Optical", "Line 1", "Line 2", "Line 3", "Tuner"):
             return SUPPORTED_PLAYBACK
         return SUPPORT_YAMAHA
 
@@ -203,7 +206,7 @@ class YamahaRn301MP(MediaPlayerEntity):
 
     def select_source(self, source):
         self._do_api_put(
-            '<Main_Zone><Input><Input_Sel>{0}</Input_Sel></Input></Main_Zone>'.format(SOURCE_MAPPING[source]))
+            '<System><Input><Input_Sel>{0}</Input_Sel></Input></System>'.format(SOURCE_MAPPING[source]))
 
     def mute_volume(self, mute):
         self._do_api_put('<System><Volume><Mute>{0}</Mute></Volume></System>'.format('On' if mute else 'Off'))
@@ -211,7 +214,8 @@ class YamahaRn301MP(MediaPlayerEntity):
 
     def _media_play_control(self, command):
         self._do_api_put(
-            '<{0}><Play_Control><Playback>{1}</Playback></Play_Control></{0}>'.format(self._device_source, command))
+			'<{0}><Play_Control><Playback>{1}</Playback></Play_Control></{0}>'.format("Player", command))
+		
 
     def media_play(self):
         """Play media"""
@@ -226,10 +230,32 @@ class YamahaRn301MP(MediaPlayerEntity):
         self._media_play_control("Stop")
 
     def media_next_track(self):
-        self._media_play_control("Skip Fwd")
+        self._media_play_control("Next")
 
     def media_previous_track(self):
-        self._media_play_control("Skip Rev")
+        self._media_play_control("Prev")
+		
+    def play_media(self, media_type, media_id, **kwargs):
+        """Play media from an ID.
+        This exposes a pass through for various input sources in the
+        Yamaha to direct play certain kinds of media. media_type is
+        treated as the input type that we are setting, and media id is
+        specific to it.
+        For the NET RADIO mediatype the format for ``media_id`` is a
+        "path" in your vtuner hierarchy. For instance:
+        ``Bookmarks>Internet>Radio Paradise``. The separators are
+        ``>`` and the parts of this are navigated by name behind the
+        scenes. There is a looping construct built into the yamaha
+        library to do this with a fallback timeout if the vtuner
+        service is unresponsive.
+        NOTE: this might take a while, because the only API interface
+        for setting the net radio station emulates button pressing and
+        navigating through the net radio menu hierarchy. And each sub
+        menu must be fetched by the receiver from the vtuner service.
+        """
+        
+        if media_type == "NET RADIO":
+            self.net_radio(media_id)		
 
     def _set_power_state(self, on):
         self._do_api_put(
@@ -243,6 +269,15 @@ class YamahaRn301MP(MediaPlayerEntity):
         else:
             _LOGGER.debug("API request ok %d", req.status_code)
         return req.text
+		
+    def _do_api_request_xml(self, data):
+        data = '<?xml version="1.0" encoding="utf-8"?>' + data
+        req = requests.post(self._base_url, data=data, timeout=DEFAULT_TIMEOUT)
+        if req.status_code != 200:
+            _LOGGER.exception("Error doing API request, %d, %s", req.status_code, data)
+        else:
+            _LOGGER.debug("API request ok %d", req.status_code)
+        return req		
 
     def _do_api_get(self, data) -> str:
         request = '<YAMAHA_AV cmd="GET">' + data + '</YAMAHA_AV>'
@@ -254,6 +289,7 @@ class YamahaRn301MP(MediaPlayerEntity):
         return response
 
     def _do_api_put(self, data) -> str:
+        _LOGGER.debug("_do_api_put: %s", data)
         data = '<YAMAHA_AV cmd="PUT">' + data + '</YAMAHA_AV>'
         return self._do_api_request(data)
 
@@ -274,6 +310,8 @@ class YamahaRn301MP(MediaPlayerEntity):
         else:
             self._media_playing = False
 
+
+
     def _update_media_playing(self):
         media_meta_mapping = {
             'Artist': 'artist',
@@ -284,10 +322,11 @@ class YamahaRn301MP(MediaPlayerEntity):
             'Track': 'song',
         }
         device_mapping = {
-            "Spotify": "Spotify",
-            "NET_RADIO": "NET_RADIO",
-            "SERVER": "SERVER",
-            "TUNER": "Tuner"
+            "Spotify": "Player",
+            "NET_RADIO": "Player",
+            "SERVER": "Player",
+            "TUNER": "Player",
+            "CD": "Player"
         }
 
         try:
@@ -328,3 +367,87 @@ class YamahaRn301MP(MediaPlayerEntity):
                 self._nullify_media_fields()
         except:
             _LOGGER.exception(data)
+
+    def _do_api_get_xml(self, data):
+        request = '<YAMAHA_AV cmd="GET">' + data + '</YAMAHA_AV>'
+        _LOGGER.debug("Request XML:")
+        _LOGGER.debug(request)
+        try:
+            res = self._do_api_request_xml(request)
+            response = cElementTree.XML(res.content)
+            if response.get("RC") != "0":
+                logger.error("Request %s failed with %s",
+                             request_text, res.content)
+                raise ResponseException(res.content)
+            return response
+        except xml.etree.ElementTree.ParseError:
+            logger.exception("Invalid XML returned for request %s: %s",
+                             request_text, res.content)
+            raise
+        return response
+
+    def _direct_sel(self, lineno):
+        global SelectNetRadioLine
+
+        request_text = YamahaCdn301MP.SelectNetRadioLine.format(lineno=lineno)
+        return self._do_api_put(request_text)
+
+    def menu_status(self):
+        #cur_input = self.input
+        #src_name = self._src_name(cur_input)
+        #if not src_name:
+        #    raise MenuUnavailable(cur_input)
+
+        request_text = YamahaCdn301MP.ListGet.format(src_name="Player")
+        _LOGGER.debug(request_text)
+        res = self._do_api_get_xml(request_text)
+
+        ready = (next(res.iter("Menu_Status")).text == "Ready")
+        layer = int(next(res.iter("Menu_Layer")).text)
+        name = next(res.iter("Menu_Name")).text
+        current_line = int(next(res.iter("Current_Line")).text)
+        max_line = int(next(res.iter("Max_Line")).text)
+        current_list = next(res.iter('Current_List'))
+
+        cl = {
+            elt.tag: elt.find('Txt').text
+            for elt in current_list.getchildren()
+            if elt.find('Attribute').text != 'Unselectable'
+        }
+
+        status = YamahaCdn301MP.MenuStatus(ready, layer, name, current_line, max_line, cl)
+        return status
+
+
+    def net_radio(self, path):
+        """Play net radio at the specified path.
+        This lets you play a NET_RADIO address in a single command
+        with by encoding it with > as separators. For instance:
+            Bookmarks>Internet>Radio Paradise
+        It does this by push commands, then looping and making sure
+        the menu is in a ready state before we try to push the next
+        one. A sufficient number of iterations are allowed for to
+        ensure we give it time to get there.
+        TODO: better error handling if we some how time out
+        """
+        _LOGGER.debug("net_radio")
+        
+        layers = path.split(">")
+        #self.input = "NET RADIO"
+        self.select_source("Net Radio")
+        
+        self._do_api_put("<Player><List_Control><Cursor>Return to Home</Cursor></List_Control></Player>")
+
+        for attempt in range(20):
+            menu = self.menu_status()
+            if menu.ready:
+                for line, value in menu.current_list.items():
+                    if value == layers[menu.layer - 1]:
+                        lineno = line[5:]
+                        self._direct_sel(lineno)
+                        if menu.layer == len(layers):
+                            return
+                        break
+            else:
+                # print("Sleeping because we are not ready yet")
+                time.sleep(1)
